@@ -1,0 +1,738 @@
+"""QtPass in tests: a night city where every test suite is a tower and every
+test a window that lights up green the moment the test lands on main.
+
+blender -b --factory-startup -P build_scene.py -- [--stills 400,1700]
+        [--anim --start N --end M] [--pct 25] [--samples 16] [--out frames]
+
+The towers, windows, signs, searchlights (CI workflows) and fireworks
+(releases) are set from timeline.py for every frame before it renders.
+"""
+import math
+import os
+import random
+import sys
+
+import bpy
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import timeline as TL  # noqa: E402
+
+FPS, FRAMES = TL.FPS, TL.FRAMES
+LATO = os.path.expanduser("~/.local/share/fonts/Lato/Lato-Bold.ttf")
+FH = 0.8          # floor height
+SPACING = 11.0    # one block per suite
+PASS = (0.3, 1.0, 0.45)
+
+
+def node(nt, kind, loc, **props):
+    n = nt.nodes.new(kind)
+    n.location = loc
+    for k, v in props.items():
+        setattr(n, k, v)
+    return n
+
+
+def new_mesh(name, verts, faces, attrs=None, mat=None):
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([tuple(v) for v in verts], [], [tuple(f) for f in faces])
+    me.update()
+    for key, vals in (attrs or {}).items():
+        a = me.attributes.new(key, "FLOAT", "POINT")
+        a.data.foreach_set("value", np.asarray(vals, dtype=np.float32))
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    if mat:
+        me.materials.append(mat)
+    return ob
+
+
+def emission_material(name, rgb, strength):
+    m = bpy.data.materials.new(name)
+    nt = m.node_tree
+    nt.nodes.clear()
+    out = node(nt, "ShaderNodeOutputMaterial", (300, 0))
+    em = node(nt, "ShaderNodeEmission", (0, 0))
+    em.inputs["Color"].default_value = (*rgb, 1)
+    em.inputs["Strength"].default_value = strength
+    nt.links.new(em.outputs[0], out.inputs[0])
+    return m, em
+
+
+def principled(name, rgb, rough, metal=0.0):
+    m = bpy.data.materials.new(name)
+    b = m.node_tree.nodes["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (*rgb, 1)
+    b.inputs["Roughness"].default_value = rough
+    b.inputs["Metallic"].default_value = metal
+    return m
+
+
+def hue(i, n):
+    """A neon colour per suite, spread round the wheel, never green (that is
+    the colour of a passing test)."""
+    h = (0.45 + 0.8 * (i * 0.618034 % 1.0)) % 1.0
+    if 0.22 < h < 0.42:
+        h += 0.2
+    import colorsys
+    return colorsys.hsv_to_rgb(h, 0.75, 1.0)
+
+
+# ---------------------------------------------------------------- layout
+
+def spiral(n):
+    """Grid cells from the centre outwards: (0,0), then ring by ring."""
+    cells = [(0, 0)]
+    r = 1
+    while len(cells) < n:
+        ring = [(x, y) for x in range(-r, r + 1) for y in range(-r, r + 1)
+                if max(abs(x), abs(y)) == r]
+        ring.sort(key=lambda c: (math.atan2(c[1], c[0]) + 2 * math.pi + 1.2) % (2 * math.pi))
+        cells += ring
+        r += 1
+    return cells[:n]
+
+
+class Tower:
+    def __init__(self, i, suite, cell):
+        self.suite = suite
+        n = max(TL.PEAK[suite], 1)
+        self.side = int(min(max(round(math.sqrt(n) / 4), 1), 3))
+        self.wpf = 4 * self.side
+        w = self.side * 0.9 + 0.5
+        self.w = w
+        rnd = random.Random(i)
+        x = cell[0] * SPACING + rnd.uniform(-1.5, 1.5)
+        y = cell[1] * SPACING + rnd.uniform(-1.5, 1.5)
+        self.xy = (x, y)
+        self.rgb = hue(i, len(TL.SUITES))
+
+        # the body: a box from z 0 to 1, scaled to its height
+        hw = w / 2
+        v = [(-hw, -hw, 0), (hw, -hw, 0), (hw, hw, 0), (-hw, hw, 0),
+             (-hw, -hw, 1), (hw, -hw, 1), (hw, hw, 1), (-hw, hw, 1)]
+        f = [(0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7), (4, 5, 6, 7)]
+        self.body = new_mesh(f"Body {suite}", v, f, mat=body_material(suite, self.rgb))
+        self.body.location = (x, y, 0)
+
+        # corner neon strips, scaled with the body
+        strips, sf = [], []
+        t = 0.06
+        for cx, cy in ((-hw, -hw), (hw, -hw), (hw, hw), (-hw, hw)):
+            b = len(strips)
+            ox, oy = (t if cx < 0 else -t), (t if cy < 0 else -t)
+            strips += [(cx - ox * 0.2, cy - oy * 0.2, 0), (cx + ox, cy - oy * 0.2, 0),
+                       (cx + ox, cy - oy * 0.2, 1), (cx - ox * 0.2, cy - oy * 0.2, 1)]
+            sf.append((b, b + 1, b + 2, b + 3))
+        self.neon_mat, self.neon_em = emission_material(f"Neon {suite}", self.rgb, 0.0)
+        self.neon = new_mesh(f"Neon {suite}", strips, sf, mat=self.neon_mat)
+        self.neon.location = (x, y, 0)
+
+        # the roof ring
+        rv, rf = [], []
+        o, ii = hw + 0.05, hw - 0.12
+        for k, (a, b) in enumerate(((o, ii),)):
+            pass
+        quad = [(-o, -o), (o, -o), (o, o), (-o, o)]
+        inner = [(-ii, -ii), (ii, -ii), (ii, ii), (-ii, ii)]
+        for j in range(4):
+            a, b = quad[j], quad[(j + 1) % 4]
+            c, d = inner[(j + 1) % 4], inner[j]
+            base = len(rv)
+            rv += [(*a, 0), (*b, 0), (*c, 0), (*d, 0)]
+            rf.append((base, base + 1, base + 2, base + 3))
+        self.roof = new_mesh(f"Roof {suite}", rv, rf, mat=self.neon_mat)
+
+        # every window it will ever have, floor by floor, round the facades
+        wv, wf, idx = [], [], []
+        ww, wh = 0.42, 0.44
+        for k in range(n):
+            fl, p = divmod(k, self.wpf)
+            side, s = divmod(p, self.side)
+            u = -hw + 0.25 + 0.45 + s * 0.9
+            z0 = fl * FH + 0.2
+            # side 0 faces -y (the camera), then round
+            pts = []
+            for du, dz in ((-ww / 2, 0), (ww / 2, 0), (ww / 2, wh), (-ww / 2, wh)):
+                uu = u + du
+                if side == 0:
+                    pts.append((uu, -hw - 0.012, z0 + dz))
+                elif side == 1:
+                    pts.append((hw + 0.012, uu, z0 + dz))
+                elif side == 2:
+                    pts.append((-uu, hw + 0.012, z0 + dz))
+                else:
+                    pts.append((-hw - 0.012, -uu, z0 + dz))
+            base = len(wv)
+            wv += pts
+            wf.append((base, base + 1, base + 2, base + 3))
+            idx += [k] * 4
+        self.win_mat, self.lit, self.height = window_material(suite)
+        self.windows = new_mesh(f"Windows {suite}", wv, wf, {"idx": idx}, self.win_mat)
+        self.windows.location = (x, y, 0)
+
+        sign_mat, self.sign_em = emission_material(f"Sign {suite}", self.rgb, 0.0)
+        self.sign = add_text(suite, (x, y - hw - 0.05, 1.0), 0.42, sign_mat)
+        self.h = 0.0
+
+    def update(self, frame):
+        t = TL.date_at(frame)
+        lit = TL.count_at(self.suite, t)
+        # the height follows the floors needed, smoothed over half a second
+        floors = 0.0
+        for k in range(12):
+            tt = TL.date_at(frame - k)
+            need = math.ceil(TL.count_at(self.suite, tt) / self.wpf - 1e-6)
+            floors += need
+        floors /= 12
+        h = floors * FH + (0.3 if floors > 0 else 0)
+        on = h > 0.01
+        for ob in (self.body, self.neon, self.roof, self.windows, self.sign):
+            ob.hide_render = not on
+        if not on:
+            return
+        x, y = self.xy
+        self.body.scale = (1, 1, h)
+        self.neon.scale = (1, 1, h)
+        self.roof.location = (x, y, h + 0.005)
+        self.sign.location = (x, y - self.w / 2 - 0.05, h + 0.15)
+        self.lit.default_value = lit
+        self.height.default_value = h
+        glow = 2.0 + 4.0 * min(lit / 40, 1)
+        self.neon_em.inputs["Strength"].default_value = glow
+        self.sign_em.inputs["Strength"].default_value = 3.0
+
+
+def body_material(suite, rgb):
+    """Tinted glass, so the towers behind show through, with a faint line of
+    the suite's colour at every floor."""
+    m = bpy.data.materials.new(f"Body {suite}")
+    m.surface_render_method = "BLENDED"
+    if hasattr(m, "use_transparency_overlap"):
+        m.use_transparency_overlap = True
+    nt = m.node_tree
+    nt.nodes.clear()
+    out = node(nt, "ShaderNodeOutputMaterial", (700, 0))
+    geo = node(nt, "ShaderNodeNewGeometry", (-700, 0))
+    sep = node(nt, "ShaderNodeSeparateXYZ", (-500, 0))
+    nt.links.new(geo.outputs["Position"], sep.inputs[0])
+    per = node(nt, "ShaderNodeMath", (-350, 0), operation="DIVIDE")
+    per.inputs[1].default_value = FH
+    nt.links.new(sep.outputs["Z"], per.inputs[0])
+    fr = node(nt, "ShaderNodeMath", (-200, 0), operation="FRACT")
+    nt.links.new(per.outputs[0], fr.inputs[0])
+    line = node(nt, "ShaderNodeMapRange", (-50, 0))
+    line.inputs["From Min"].default_value = 0.0
+    line.inputs["From Max"].default_value = 0.05
+    line.inputs["To Min"].default_value = 1.0
+    line.inputs["To Max"].default_value = 0.0
+    nt.links.new(fr.outputs[0], line.inputs["Value"])
+    glow = node(nt, "ShaderNodeMath", (120, 0), operation="MULTIPLY_ADD")
+    glow.inputs[1].default_value = 1.2
+    glow.inputs[2].default_value = 0.04
+    nt.links.new(line.outputs[0], glow.inputs[0])
+    b = node(nt, "ShaderNodeBsdfPrincipled", (350, 0))
+    b.inputs["Base Color"].default_value = (0.01, 0.012, 0.02, 1)
+    b.inputs["Roughness"].default_value = 0.12
+    b.inputs["Alpha"].default_value = 0.35
+    b.inputs["Emission Color"].default_value = (*rgb, 1)
+    nt.links.new(glow.outputs[0], b.inputs["Emission Strength"])
+    nt.links.new(b.outputs[0], out.inputs[0])
+    return m
+
+
+def window_material(suite):
+    """Lit (green, with a white flash as it lights), dark glass, or not yet
+    built (above the roof: transparent)."""
+    m = bpy.data.materials.new(f"Windows {suite}")
+    nt = m.node_tree
+    nt.nodes.clear()
+    out = node(nt, "ShaderNodeOutputMaterial", (900, 0))
+    attr = node(nt, "ShaderNodeAttribute", (-800, 200), attribute_name="idx")
+    lit = node(nt, "ShaderNodeValue", (-800, 0))
+    lit.label = "lit"
+    height = node(nt, "ShaderNodeValue", (-800, -200))
+    height.label = "height"
+    geo = node(nt, "ShaderNodeNewGeometry", (-800, -400))
+    sep = node(nt, "ShaderNodeSeparateXYZ", (-600, -400))
+    nt.links.new(geo.outputs["Position"], sep.inputs[0])
+    # age = lit - idx: > 0 once lit; small = just lit
+    age = node(nt, "ShaderNodeMath", (-600, 100), operation="SUBTRACT")
+    nt.links.new(lit.outputs[0], age.inputs[0])
+    nt.links.new(attr.outputs["Fac"], age.inputs[1])
+    on = node(nt, "ShaderNodeMath", (-400, 200), operation="GREATER_THAN")
+    on.inputs[1].default_value = 0.0
+    nt.links.new(age.outputs[0], on.inputs[0])
+    # flash: 1 at the moment it lights, gone after ~8 more tests
+    fl = node(nt, "ShaderNodeMapRange", (-400, 0))
+    fl.inputs["From Min"].default_value = 0.0
+    fl.inputs["From Max"].default_value = 1.5
+    fl.inputs["To Min"].default_value = 1.0
+    fl.inputs["To Max"].default_value = 0.0
+    nt.links.new(age.outputs[0], fl.inputs["Value"])
+    flash = node(nt, "ShaderNodeMath", (-200, 0), operation="MULTIPLY")
+    nt.links.new(fl.outputs[0], flash.inputs[0])
+    nt.links.new(on.outputs[0], flash.inputs[1])
+    col = node(nt, "ShaderNodeMix", (0, 100), data_type="RGBA")
+    col.inputs["A"].default_value = (0.08, 1.0, 0.22, 1)
+    col.inputs["B"].default_value = (0.9, 1.0, 0.9, 1)
+    nt.links.new(flash.outputs[0], col.inputs["Factor"])
+    strength = node(nt, "ShaderNodeMath", (0, -100), operation="MULTIPLY_ADD")
+    strength.inputs[1].default_value = 8.0
+    strength.inputs[2].default_value = 0.55
+    nt.links.new(flash.outputs[0], strength.inputs[0])
+    em = node(nt, "ShaderNodeEmission", (250, 100))
+    nt.links.new(col.outputs["Result"], em.inputs["Color"])
+    nt.links.new(strength.outputs[0], em.inputs["Strength"])
+    glass = node(nt, "ShaderNodeBsdfPrincipled", (250, -150))
+    glass.inputs["Base Color"].default_value = (0.01, 0.015, 0.025, 1)
+    glass.inputs["Roughness"].default_value = 0.08
+    glass.inputs["Metallic"].default_value = 0.6
+    mix_lit = node(nt, "ShaderNodeMixShader", (500, 0))
+    nt.links.new(on.outputs[0], mix_lit.inputs[0])
+    nt.links.new(glass.outputs[0], mix_lit.inputs[1])
+    nt.links.new(em.outputs[0], mix_lit.inputs[2])
+    # built: below the roof
+    built = node(nt, "ShaderNodeMath", (-200, -400), operation="LESS_THAN")
+    nt.links.new(sep.outputs["Z"], built.inputs[0])
+    nt.links.new(height.outputs[0], built.inputs[1])
+    tr = node(nt, "ShaderNodeBsdfTransparent", (500, -200))
+    mix = node(nt, "ShaderNodeMixShader", (700, 0))
+    nt.links.new(built.outputs[0], mix.inputs[0])
+    nt.links.new(tr.outputs[0], mix.inputs[1])
+    nt.links.new(mix_lit.outputs[0], mix.inputs[2])
+    nt.links.new(mix.outputs[0], out.inputs[0])
+    return m, lit.outputs[0], height.outputs[0]
+
+
+def add_text(body, loc, size, mat):
+    cu = bpy.data.curves.new(body, "FONT")
+    cu.body = body
+    cu.size = size
+    cu.extrude = size * 0.05
+    cu.font = bpy.data.fonts.load(LATO, check_existing=True)
+    cu.align_x = "CENTER"
+    ob = bpy.data.objects.new("Sign " + body, cu)
+    ob.location = loc
+    ob.rotation_euler = (math.pi / 2, 0, 0)
+    bpy.context.scene.collection.objects.link(ob)
+    cu.materials.append(mat)
+    ob.visible_shadow = False
+    return ob
+
+
+# ---------------------------------------------------------------- the city
+
+def build_ground():
+    """Wet asphalt, with streets of sodium light between the blocks."""
+    m = bpy.data.materials.new("Ground")
+    nt = m.node_tree
+    nt.nodes.clear()
+    out = node(nt, "ShaderNodeOutputMaterial", (900, 0))
+    tc = node(nt, "ShaderNodeTexCoord", (-900, 0))
+    sep = node(nt, "ShaderNodeSeparateXYZ", (-700, 0))
+    nt.links.new(tc.outputs["Object"], sep.inputs[0])
+    lines = []
+    for axis, y in (("X", 150), ("Y", -150)):
+        # distance to the middle of the street between blocks
+        a = node(nt, "ShaderNodeMath", (-500, y), operation="ADD")
+        a.inputs[1].default_value = SPACING / 2
+        nt.links.new(sep.outputs[axis], a.inputs[0])
+        md = node(nt, "ShaderNodeMath", (-350, y), operation="PINGPONG")
+        md.inputs[1].default_value = SPACING / 2
+        nt.links.new(a.outputs[0], md.inputs[0])
+        line = node(nt, "ShaderNodeMapRange", (-200, y))
+        line.inputs["From Min"].default_value = 0.0
+        line.inputs["From Max"].default_value = 0.08
+        line.inputs["To Min"].default_value = 1.0
+        line.inputs["To Max"].default_value = 0.0
+        nt.links.new(md.outputs[0], line.inputs["Value"])
+        lines.append(line)
+    both = node(nt, "ShaderNodeMath", (0, 0), operation="MAXIMUM")
+    nt.links.new(lines[0].outputs[0], both.inputs[0])
+    nt.links.new(lines[1].outputs[0], both.inputs[1])
+    # fade the streets out with distance, so the grid has an edge
+    ln = node(nt, "ShaderNodeVectorMath", (-500, -350), operation="LENGTH")
+    nt.links.new(tc.outputs["Object"], ln.inputs[0])
+    edge = node(nt, "ShaderNodeMapRange", (-300, -350))
+    edge.inputs["From Min"].default_value = 30.0
+    edge.inputs["From Max"].default_value = 70.0
+    edge.inputs["To Min"].default_value = 1.0
+    edge.inputs["To Max"].default_value = 0.0
+    nt.links.new(ln.outputs["Value"], edge.inputs["Value"])
+    street = node(nt, "ShaderNodeMath", (150, -100), operation="MULTIPLY")
+    nt.links.new(both.outputs[0], street.inputs[0])
+    nt.links.new(edge.outputs[0], street.inputs[1])
+    self_street = node(nt, "ShaderNodeValue", (150, -300))
+    self_street.label = "streets"
+    st = node(nt, "ShaderNodeMath", (300, -150), operation="MULTIPLY")
+    nt.links.new(street.outputs[0], st.inputs[0])
+    nt.links.new(self_street.outputs[0], st.inputs[1])
+    bsdf = node(nt, "ShaderNodeBsdfPrincipled", (500, 100))
+    bsdf.inputs["Base Color"].default_value = (0.012, 0.013, 0.016, 1)
+    noise = node(nt, "ShaderNodeTexNoise", (-200, 350))
+    noise.inputs["Scale"].default_value = 0.35
+    rough = node(nt, "ShaderNodeMapRange", (0, 350))
+    rough.inputs["To Min"].default_value = 0.04
+    rough.inputs["To Max"].default_value = 0.45
+    nt.links.new(noise.outputs["Fac"], rough.inputs["Value"])
+    nt.links.new(rough.outputs[0], bsdf.inputs["Roughness"])
+    bsdf.inputs["Emission Color"].default_value = (1.0, 0.55, 0.2, 1)
+    nt.links.new(st.outputs[0], bsdf.inputs["Emission Strength"])
+    nt.links.new(bsdf.outputs[0], out.inputs[0])
+    bpy.ops.mesh.primitive_plane_add(size=600)
+    g = bpy.context.active_object
+    g.name = "Ground"
+    g.data.materials.append(m)
+    return self_street.outputs[0]
+
+
+class Searchlights:
+    """One beam per CI workflow, sweeping the sky from the edge of town."""
+
+    def __init__(self):
+        self.beams = []
+        m = bpy.data.materials.new("Beam")
+        m.surface_render_method = "BLENDED"  # dithered drops what it makes transparent
+        nt = m.node_tree
+        nt.nodes.clear()
+        out = node(nt, "ShaderNodeOutputMaterial", (700, 0))
+        tc = node(nt, "ShaderNodeTexCoord", (-600, 0))
+        sep = node(nt, "ShaderNodeSeparateXYZ", (-400, 0))
+        nt.links.new(tc.outputs["Generated"], sep.inputs[0])
+        fall = node(nt, "ShaderNodeMath", (-200, 0), operation="POWER")
+        inv = node(nt, "ShaderNodeMath", (-300, 100), operation="SUBTRACT")
+        inv.inputs[0].default_value = 1.0
+        nt.links.new(sep.outputs["Z"], inv.inputs[1])
+        nt.links.new(inv.outputs[0], fall.inputs[0])
+        fall.inputs[1].default_value = 3.0
+        # brighter in the core of the beam (facing the camera)
+        lw = node(nt, "ShaderNodeLayerWeight", (-400, -200))
+        lw.inputs["Blend"].default_value = 0.85
+        core = node(nt, "ShaderNodeMath", (-200, -200), operation="SUBTRACT")
+        core.inputs[0].default_value = 1.0
+        nt.links.new(lw.outputs["Facing"], core.inputs[1])
+        a = node(nt, "ShaderNodeMath", (0, 0), operation="MULTIPLY")
+        nt.links.new(fall.outputs[0], a.inputs[0])
+        nt.links.new(core.outputs[0], a.inputs[1])
+        self.fade = node(nt, "ShaderNodeValue", (0, -200))
+        b = node(nt, "ShaderNodeMath", (150, 0), operation="MULTIPLY")
+        nt.links.new(a.outputs[0], b.inputs[0])
+        nt.links.new(self.fade.outputs[0], b.inputs[1])
+        em = node(nt, "ShaderNodeEmission", (300, 100))
+        em.inputs["Color"].default_value = (0.75, 0.85, 1.0, 1)
+        nt.links.new(b.outputs[0], em.inputs["Strength"])
+        tr = node(nt, "ShaderNodeBsdfTransparent", (300, -100))
+        add = node(nt, "ShaderNodeAddShader", (500, 0))
+        nt.links.new(em.outputs[0], add.inputs[0])
+        nt.links.new(tr.outputs[0], add.inputs[1])
+        nt.links.new(add.outputs[0], out.inputs[0])
+        self.mats = []
+        rnd = random.Random(12)
+        for i in range(12):
+            mi = m.copy()
+            fade = [n for n in mi.node_tree.nodes if n.type == "VALUE"][0]
+            bpy.ops.mesh.primitive_cone_add(vertices=32, radius1=0.25, radius2=9.0,
+                                            depth=110, end_fill_type="NOTHING",
+                                            location=(0, 0, 55))
+            ob = bpy.context.active_object
+            ob.name = f"Beam {i}"
+            # origin at the lamp
+            bpy.context.scene.cursor.location = (0, 0, 0)
+            bpy.ops.object.origin_set(type="ORIGIN_CURSOR")
+            ob.data.materials.append(mi)
+            ob.visible_shadow = False
+            ang = 2 * math.pi * (i * 0.381966 % 1.0)
+            r = 52 + rnd.uniform(-6, 6)
+            ob.location = (r * math.cos(ang), r * math.sin(ang) + 10, 0)
+            self.beams.append((ob, fade.outputs[0], rnd.uniform(0, 6.28),
+                               rnd.uniform(0.25, 0.45), rnd.choice((-1, 1))))
+
+    def update(self, frame):
+        t = TL.t_of(frame)
+        n = TL.ci_at(TL.date_at(frame))
+        for i, (ob, fade, ph, speed, sense) in enumerate(self.beams):
+            on = i < n
+            ob.hide_render = not on
+            if not on:
+                continue
+            born = TL.frame_of_date(next((s["t"] for s in TL.SAMPLES if s["ci"] > i),
+                                         TL.T_NOW))
+            f = min(max((frame - born) / 30, 0), 1)
+            fade.default_value = 0.3 * f
+            tilt = math.radians(22 + 8 * math.sin(t * speed * 0.7 + ph))
+            spin = ph + sense * t * speed
+            # lean towards the city a little: aim at a point above it
+            ob.rotation_euler = (tilt, 0, spin)
+
+
+class Fireworks:
+    """A burst over town for every release."""
+
+    def __init__(self):
+        rnd = random.Random(44)
+        self.bursts = []
+        for f0, name in TL.releases():
+            big = "rc" not in name and "beta" not in name
+            n = 90 if big else 45
+            col = [(1.0, 0.45, 0.2), (0.4, 0.7, 1.0), (1.0, 0.85, 0.35),
+                   (0.95, 0.35, 0.8), (0.6, 1.0, 0.9)][rnd.randrange(5)]
+            c = (rnd.uniform(-25, 25), rnd.uniform(5, 40), rnd.uniform(28, 42))
+            dirs = []
+            for _ in range(n):
+                v = np.array([rnd.gauss(0, 1) for _ in range(3)])
+                v /= np.linalg.norm(v) + 1e-9
+                dirs.append(v * rnd.uniform(9, 13) * (1.0 if big else 0.7))
+            self.bursts.append((f0 + rnd.uniform(0, 4), np.array(c), np.array(dirs), col))
+        m = bpy.data.materials.new("Spark")
+        nt = m.node_tree
+        nt.nodes.clear()
+        out = node(nt, "ShaderNodeOutputMaterial", (400, 0))
+        em = node(nt, "ShaderNodeEmission", (200, 0))
+        ca = node(nt, "ShaderNodeAttribute", (-200, 100), attribute_name="Col")
+        ha = node(nt, "ShaderNodeAttribute", (-200, -100), attribute_name="heat")
+        mul = node(nt, "ShaderNodeMath", (0, -100), operation="MULTIPLY")
+        mul.inputs[1].default_value = 40.0
+        nt.links.new(ha.outputs["Fac"], mul.inputs[0])
+        nt.links.new(ca.outputs["Color"], em.inputs["Color"])
+        nt.links.new(mul.outputs[0], em.inputs["Strength"])
+        nt.links.new(em.outputs[0], out.inputs[0])
+        self.mat = m
+        self.ob = None
+        self.flash = bpy.data.lights.new("Burst", "POINT")
+        self.flash.shadow_soft_size = 4
+        self.lo = bpy.data.objects.new("Burst", self.flash)
+        bpy.context.scene.collection.objects.link(self.lo)
+
+    def update(self, frame):
+        pts, cols, heat = [], [], []
+        flash, fpos, fcol = 0.0, (0, 0, 30), (1, 1, 1)
+        for f0, c, dirs, col in self.bursts:
+            tau = (frame - f0) / FPS
+            if tau < 0 or tau > 2.6:
+                continue
+            k = 1.6
+            p = c + dirs * (1 - math.exp(-k * tau)) / k
+            p[:, 2] -= 0.5 * 4.0 * tau * tau
+            life = max(1 - tau / 2.6, 0)
+            for q in p:
+                pts.append(q)
+                cols.append(col)
+                heat.append(life ** 1.5 * (0.6 + 0.4 * math.sin(frame * 1.7 + q[0])))
+            e = max(1 - tau / 0.5, 0)
+            if e > flash:
+                flash, fpos, fcol = e, tuple(c), col
+        if self.ob is not None:
+            bpy.data.objects.remove(self.ob)
+        self.flash.energy = 60000 * flash
+        self.flash.color = fcol
+        self.lo.location = fpos
+        if not pts:
+            self.ob = None
+            return
+        r = 0.16
+        oct_v = np.array([(r, 0, 0), (-r, 0, 0), (0, r, 0), (0, -r, 0), (0, 0, r), (0, 0, -r)])
+        oct_f = [(0, 2, 4), (2, 1, 4), (1, 3, 4), (3, 0, 4), (2, 0, 5), (1, 2, 5), (3, 1, 5), (0, 3, 5)]
+        verts, faces, vcol, vheat = [], [], [], []
+        for i, q in enumerate(pts):
+            verts += list(oct_v + q)
+            faces += [tuple(j + 6 * i for j in f) for f in oct_f]
+            vcol += [cols[i]] * 6
+            vheat += [heat[i]] * 6
+        me = bpy.data.meshes.new("Sparks")
+        me.from_pydata([tuple(v) for v in verts], [], faces)
+        ca = me.color_attributes.new("Col", "FLOAT_COLOR", "POINT")
+        c4 = np.ones((len(verts), 4), dtype=np.float32)
+        c4[:, :3] = vcol
+        ca.data.foreach_set("color", c4.ravel())
+        ha = me.attributes.new("heat", "FLOAT", "POINT")
+        ha.data.foreach_set("value", np.asarray(vheat, dtype=np.float32))
+        me.materials.append(self.mat)
+        self.ob = bpy.data.objects.new("Sparks", me)
+        self.ob.visible_shadow = False
+        bpy.context.scene.collection.objects.link(self.ob)
+
+
+def setup_world():
+    s = bpy.context.scene
+    w = bpy.data.worlds.new("Night")
+    s.world = w
+    nt = w.node_tree
+    nt.nodes.clear()
+    out = node(nt, "ShaderNodeOutputWorld", (800, 0))
+    bg = node(nt, "ShaderNodeBackground", (600, 0))
+    tc = node(nt, "ShaderNodeTexCoord", (-800, 0))
+    sep = node(nt, "ShaderNodeSeparateXYZ", (-600, 200))
+    nt.links.new(tc.outputs["Generated"], sep.inputs[0])
+    # sky gradient by height of the view direction
+    grad = node(nt, "ShaderNodeValToRGB", (-400, 200))
+    nt.links.new(sep.outputs["Z"], grad.inputs["Fac"])
+    els = grad.color_ramp.elements
+    els[0].position, els[0].color = 0.5, (0.02, 0.025, 0.05, 1)
+    els[1].position, els[1].color = 0.75, (0.002, 0.003, 0.01, 1)
+    # dawn: a warmer, lighter horizon
+    dgrad = node(nt, "ShaderNodeValToRGB", (-400, -50))
+    nt.links.new(sep.outputs["Z"], dgrad.inputs["Fac"])
+    d = dgrad.color_ramp.elements
+    d[0].position, d[0].color = 0.5, (0.09, 0.05, 0.06, 1)
+    d[1].position, d[1].color = 0.53, (0.03, 0.03, 0.08, 1)
+    d.new(0.8).color = (0.01, 0.02, 0.06, 1)
+    dawn_mix = node(nt, "ShaderNodeMix", (-150, 100), data_type="RGBA")
+    nt.links.new(grad.outputs["Color"], dawn_mix.inputs["A"])
+    nt.links.new(dgrad.outputs["Color"], dawn_mix.inputs["B"])
+    dawn = node(nt, "ShaderNodeValue", (-400, -250))
+    nt.links.new(dawn.outputs[0], dawn_mix.inputs["Factor"])
+    # stars
+    vor = node(nt, "ShaderNodeTexVoronoi", (-400, -400))
+    vor.inputs["Scale"].default_value = 380.0
+    nt.links.new(tc.outputs["Generated"], vor.inputs["Vector"])
+    pt = node(nt, "ShaderNodeMapRange", (-200, -400))
+    pt.inputs["From Min"].default_value = 0.0
+    pt.inputs["From Max"].default_value = 0.08
+    pt.inputs["To Min"].default_value = 1.0
+    pt.inputs["To Max"].default_value = 0.0
+    nt.links.new(vor.outputs["Distance"], pt.inputs["Value"])
+    sharp = node(nt, "ShaderNodeMath", (0, -400), operation="POWER")
+    sharp.inputs[1].default_value = 8.0
+    nt.links.new(pt.outputs[0], sharp.inputs[0])
+    above = node(nt, "ShaderNodeMath", (0, -250), operation="GREATER_THAN")
+    above.inputs[1].default_value = 0.52
+    nt.links.new(sep.outputs["Z"], above.inputs[0])
+    starv = node(nt, "ShaderNodeMath", (150, -350), operation="MULTIPLY")
+    nt.links.new(sharp.outputs[0], starv.inputs[0])
+    nt.links.new(above.outputs[0], starv.inputs[1])
+    fadestars = node(nt, "ShaderNodeMath", (300, -350), operation="MULTIPLY")
+    nt.links.new(starv.outputs[0], fadestars.inputs[0])
+    stars_level = node(nt, "ShaderNodeValue", (150, -500))
+    nt.links.new(stars_level.outputs[0], fadestars.inputs[1])
+    add = node(nt, "ShaderNodeMix", (400, 0), data_type="RGBA", blend_type="ADD")
+    add.inputs["Factor"].default_value = 1.0
+    nt.links.new(dawn_mix.outputs["Result"], add.inputs["A"])
+    nt.links.new(fadestars.outputs[0], add.inputs["B"])
+    nt.links.new(add.outputs["Result"], bg.inputs["Color"])
+    bg.inputs["Strength"].default_value = 1.0
+    nt.links.new(bg.outputs[0], out.inputs[0])
+    moon = bpy.data.lights.new("Moon", "SUN")
+    moon.energy = 0.25
+    moon.color = (0.6, 0.7, 1.0)
+    mo = bpy.data.objects.new("Moon", moon)
+    mo.rotation_euler = (math.radians(60), 0, math.radians(-35))
+    s.collection.objects.link(mo)
+    return dawn.outputs[0], stars_level.outputs[0], moon
+
+
+class Camera:
+    def __init__(self):
+        cd = bpy.data.cameras.new("Cam")
+        cd.sensor_width = 36
+        cd.clip_end = 2000
+        self.ob = bpy.data.objects.new("Cam", cd)
+        bpy.context.scene.collection.objects.link(self.ob)
+        bpy.context.scene.camera = self.ob
+        self.tgt = bpy.data.objects.new("Target", None)
+        bpy.context.scene.collection.objects.link(self.tgt)
+        c = self.ob.constraints.new("TRACK_TO")
+        c.target = self.tgt
+        c.track_axis = "TRACK_NEGATIVE_Z"
+        c.up_axis = "UP_Y"
+        cd.dof.use_dof = False
+
+    def set(self, frame):
+        cam, tgt, lens = TL.camera(frame)
+        self.ob.location = cam
+        self.tgt.location = tgt
+        self.ob.data.lens = lens
+
+
+def setup_render(pct, samples):
+    s = bpy.context.scene
+    s.render.engine = "BLENDER_EEVEE"
+    s.render.resolution_x, s.render.resolution_y = 3840, 1608
+    s.render.resolution_percentage = pct
+    s.render.fps = FPS
+    s.frame_start, s.frame_end = 1, FRAMES
+    ee = s.eevee
+    ee.taa_render_samples = samples
+    for prop, val in (("use_raytracing", True), ("use_shadows", True)):
+        if hasattr(ee, prop):
+            setattr(ee, prop, val)
+    vs = s.view_settings
+    vs.view_transform = "AgX"
+    for look in ("AgX - Punchy", "Punchy"):
+        try:
+            vs.look = look
+            break
+        except TypeError:
+            pass
+    vs.exposure = 0.0
+
+
+BODY = None
+
+
+class Scene:
+    def __init__(self):
+        global BODY
+        BODY = principled("Body", (0.02, 0.022, 0.03), 0.3, 0.4)
+        self.streets = build_ground()
+        cells = spiral(len(TL.SUITES))
+        self.towers = [Tower(i, s, cells[i]) for i, s in enumerate(TL.SUITES)]
+        self.beams = Searchlights()
+        self.fireworks = Fireworks()
+        self.dawn, self.stars, self.moon = setup_world()
+        self.camera = Camera()
+
+    def update(self, f):
+        t = TL.t_of(f)
+        for tw in self.towers:
+            tw.update(f)
+        self.beams.update(f)
+        self.fireworks.update(f)
+        dawn = TL.dawn(t)
+        self.dawn.default_value = dawn
+        self.stars.default_value = 1.0 - 0.8 * dawn
+        self.moon.energy = 0.25 + 1.5 * dawn
+        # the streets light up with the city
+        total = TL.total_at(TL.date_at(f))
+        self.streets.default_value = 0.08 + 0.9 * min(total / 400, 1)
+        self.camera.set(f)
+
+
+def main():
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    opts = {"pct": 25, "stills": "", "anim": False, "samples": 16,
+            "start": 1, "end": FRAMES, "out": "frames", "save": ""}
+    i = 0
+    while i < len(argv):
+        k = argv[i].lstrip("-")
+        if k == "anim":
+            opts["anim"] = True
+            i += 1
+        else:
+            opts[k] = argv[i + 1]
+            i += 2
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    setup_render(int(opts["pct"]), int(opts["samples"]))
+    sc = Scene()
+    s = bpy.context.scene
+
+    def render(f, path):
+        s.frame_set(f)
+        sc.update(f)
+        s.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+
+    if opts["save"]:
+        s.frame_set(1700)
+        sc.update(1700)
+        bpy.ops.wm.save_as_mainfile(filepath=os.path.join(HERE, opts["save"]))
+    for f in [int(v) for v in opts["stills"].split(",") if v]:
+        render(f, os.path.join(HERE, "renders", f"still_{f:04d}.png"))
+    if opts["anim"]:
+        s.render.image_settings.file_format = "PNG"
+        for f in range(int(opts["start"]), int(opts["end"]) + 1):
+            render(f, os.path.join(HERE, "renders", opts["out"], f"f_{f:04d}.png"))
+
+
+main()
