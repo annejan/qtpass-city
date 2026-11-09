@@ -44,7 +44,12 @@ blender -b --factory-startup -P build_scene.py -- --stills 229,1057,1873 --pct 2
 ./render_chunks.sh 1 2040 25 16 frames                 # low-res, resumes after a crash
 python3 audio.py audio.wav
 ./finish.sh renders/frames qtpass-city.mp4
+CARDS_LANG=uk ./finish.sh renders/frames qtpass-city-uk.mp4   # Ukrainian titles
 ```
+
+The titles are laid over the rendered frames by `finish.sh`, so another
+language costs one more encode, not a render: add `cards/<lang>.json` with
+the words for each card (see `cards/uk.json`).
 
 2040 frames at 24 fps (85 s), 3840x1608 (2.39:1) at 100 %. A test is a
 `void name();` under `private slots:` in a `tst_*.cpp` or `tst_*.h`, minus

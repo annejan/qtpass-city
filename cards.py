@@ -67,10 +67,28 @@ def card(w, h, layout, big, small):
     return Image.alpha_composite(shadow, img)
 
 
+def translated(cards):
+    """The cards in CARDS_LANG (cards/<lang>.json), when it is set: same
+    times and layout, other words."""
+    lang = os.environ.get("CARDS_LANG")
+    if not lang:
+        return cards
+    import json
+    words = json.load(open(os.path.join(HERE, "cards", f"{lang}.json")))["cards"]
+    if len(words) != len(cards):
+        sys.exit(f"cards/{lang}.json has {len(words)} cards, the film {len(cards)}")
+    last = timeline.SAMPLES[-1]["suites"]
+    # thousands with a no-break space, as Ukrainian (and most of Europe) writes them
+    total = f"{sum(last.values()):,}".replace(",", "\u00a0")
+    fill = {"total": total, "suites": len(last)}
+    return [(t0, t1, layout, big.format(**fill), small.format(**fill))
+            for (t0, t1, layout, _, _), (big, small) in zip(cards, words)]
+
+
 def main():
     w, h, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
     lines = []
-    for i, (t0, t1, layout, big, small) in enumerate(CARDS):
+    for i, (t0, t1, layout, big, small) in enumerate(translated(CARDS)):
         path = f"{out}/card_{i:02d}.png"
         card(w, h, layout, big, small).save(path)
         lines.append(f"{path} {t0} {t1 - t0:g} {t1 - t0 - 0.9:g}")
