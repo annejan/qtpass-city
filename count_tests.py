@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Count Qt Test functions per suite over QtPass's history.
 
-count_tests.py QTPASS_REPO [REV] [OUTDIR]   -> OUTDIR/tests.json, OUTDIR/tags.json
+count_tests.py QTPASS_REPO [REV] [OUTDIR]   -> OUTDIR/tests.json, tags.json, commits.json
 
 REV defaults to main; the film uses bb0fad7a9 (4 November 2026). OUTDIR
 defaults to data. Sampled at every first-parent commit up to REV that
@@ -13,6 +13,8 @@ minus the fixtures (init, cleanup, initTestCase, cleanupTestCase) and the
 
 tests.json: [{"t": unix, "rev": sha, "suites": {name: n}, "ci": n}, ...]
 tags.json: [[tag, unix], ...] for every v* tag, oldest first.
+commits.json: [[unix, kind], ...] for every commit up to REV (the traffic),
+kind from the subject: l10n, ci, test, fix, docs, tidy, feat or other.
 """
 import json
 import os
@@ -63,6 +65,22 @@ def ci_at(sha):
             + sum(f in root for f in (".travis.yml", "appveyor.yml", ".appveyor.yml")))
 
 
+# What a commit was, from its subject: the colour of its snake. First match.
+KINDS = [
+    ("l10n", r"translat|weblate|l10n|locali[sz]ation|\.ts\b|lupdate"),
+    ("ci", r"^ci\b|^ci:|bump |dependabot|workflow|github action|\bCI\b|appveyor|travis"),
+    ("test", r"\btests?\b|^test|coverage|tst_"),
+    ("fix", r"\bfix|bug|crash|^revert|regression"),
+    ("docs", r"readme|changelog|\bdocs?\b|faq|doxygen|typo|comment"),
+    ("tidy", r"refactor|clean|simplif|rename|move|extract|style|format|lint|clang|prettier|tidy"),
+    ("feat", r"^feat|\badd|support|implement|new |allow|option|enable"),
+]
+
+
+def kind_of(subject):
+    return next((k for k, p in KINDS if re.search(p, subject, re.I)), "other")
+
+
 def revs(*paths):
     log = git("log", "--first-parent", "--format=%H %ct", REV, "--", *paths)
     return [(l.split()[0], int(l.split()[1])) for l in log.split("\n") if l.strip()][::-1]
@@ -88,6 +106,10 @@ def main():
     json.dump([[n, int(t)] for n, t in (l.split() for l in tags if l.startswith("v"))
                if int(t) <= end + 2 * 86400],
               open(os.path.join(OUT, "tags.json"), "w"))
+    commits = sorted([int(t), kind_of(subject)] for t, subject in
+                     (l.split("\t", 1) for l in git("log", "--format=%ct%x09%s", REV).split("\n")
+                      if l.strip()))
+    json.dump(commits, open(os.path.join(OUT, "commits.json"), "w"))
     print(len(out), "samples,", sum(out[-1]["suites"].values()), "tests in",
           len(out[-1]["suites"]), "suites at", REV)
 

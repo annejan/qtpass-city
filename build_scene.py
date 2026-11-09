@@ -18,6 +18,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import timeline as TL  # noqa: E402
+import traffic  # noqa: E402
 
 FPS, FRAMES = TL.FPS, TL.FRAMES
 LATO = os.path.expanduser("~/.local/share/fonts/Lato/Lato-Bold.ttf")
@@ -417,9 +418,18 @@ class Searchlights:
         nt.links.new(fall.outputs[0], a.inputs[0])
         nt.links.new(core.outputs[0], a.inputs[1])
         self.fade = node(nt, "ShaderNodeValue", (0, -200))
+        # the haze rolls in as the lens enters a beam instead of snapping on
+        cam = node(nt, "ShaderNodeCameraData", (-400, -400))
+        near = node(nt, "ShaderNodeMapRange", (-200, -400))
+        near.inputs["From Min"].default_value = 1.0
+        near.inputs["From Max"].default_value = 7.0
+        nt.links.new(cam.outputs["View Distance"], near.inputs["Value"])
+        fade_near = node(nt, "ShaderNodeMath", (0, -350), operation="MULTIPLY")
+        nt.links.new(self.fade.outputs[0], fade_near.inputs[0])
+        nt.links.new(near.outputs[0], fade_near.inputs[1])
         b = node(nt, "ShaderNodeMath", (150, 0), operation="MULTIPLY")
         nt.links.new(a.outputs[0], b.inputs[0])
-        nt.links.new(self.fade.outputs[0], b.inputs[1])
+        nt.links.new(fade_near.outputs[0], b.inputs[1])
         em = node(nt, "ShaderNodeEmission", (300, 100))
         em.inputs["Color"].default_value = (0.75, 0.85, 1.0, 1)
         nt.links.new(b.outputs[0], em.inputs["Strength"])
@@ -557,6 +567,75 @@ class Fireworks:
         bpy.context.scene.collection.objects.link(self.ob)
 
 
+class Traffic:
+    """The commits as light snakes on the streets (traffic.py): a ribbon per
+    snake, white-hot at the head, the colour of its commit's kind along the
+    body, fading to the tail."""
+
+    def __init__(self):
+        m = bpy.data.materials.new("Snake")
+        nt = m.node_tree
+        nt.nodes.clear()
+        out = node(nt, "ShaderNodeOutputMaterial", (400, 0))
+        em = node(nt, "ShaderNodeEmission", (200, 0))
+        ca = node(nt, "ShaderNodeAttribute", (-200, 100), attribute_name="Col")
+        ha = node(nt, "ShaderNodeAttribute", (-200, -100), attribute_name="heat")
+        mul = node(nt, "ShaderNodeMath", (0, -100), operation="MULTIPLY")
+        mul.inputs[1].default_value = 4.0
+        nt.links.new(ha.outputs["Fac"], mul.inputs[0])
+        nt.links.new(ca.outputs["Color"], em.inputs["Color"])
+        nt.links.new(mul.outputs[0], em.inputs["Strength"])
+        nt.links.new(em.outputs[0], out.inputs[0])
+        self.mat = m
+        self.ob = None
+
+    def update(self, frame):
+        if self.ob is not None:
+            bpy.data.objects.remove(self.ob)
+            self.ob = None
+        verts, faces, cols, heat = [], [], [], []
+        half = 0.2
+        for pts, glow, kind in traffic.snakes(frame):
+            if len(pts) < 2:
+                continue
+            rgb = np.array(traffic.COLOURS[kind])
+            n = len(pts)
+            base = len(verts)
+            for k, (x, y) in enumerate(pts):
+                a = pts[max(k - 1, 0)]
+                b = pts[min(k + 1, n - 1)]
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                ln = math.hypot(dx, dy) or 1.0
+                nx, ny = -dy / ln * half, dx / ln * half
+                u = k / (n - 1)
+                w = max(1 - u * 12, 0)
+                c = w * np.ones(3) + (1 - w) * rgb * (1 - 0.4 * u)
+                # a ribbon on the road and a low fin, so it reads from the street too
+                verts += [(x + nx, y + ny, 0.05), (x - nx, y - ny, 0.05),
+                          (x, y, 0.05), (x, y, 0.32 * (1 - 0.6 * u))]
+                cols += [c, c, c, c]
+                h = glow * (1 - 0.85 * u) * (1.6 if k == 0 else 1.0)
+                heat += [h, h, h, h * 0.8]
+                if k:
+                    i = base + 4 * (k - 1)
+                    faces.append((i, i + 1, i + 5, i + 4))
+                    faces.append((i + 2, i + 3, i + 7, i + 6))
+        if not faces:
+            return
+        me = bpy.data.meshes.new("Snakes")
+        me.from_pydata(verts, [], faces)
+        ca = me.color_attributes.new("Col", "FLOAT_COLOR", "POINT")
+        c4 = np.ones((len(verts), 4), dtype=np.float32)
+        c4[:, :3] = cols
+        ca.data.foreach_set("color", c4.ravel())
+        ha = me.attributes.new("heat", "FLOAT", "POINT")
+        ha.data.foreach_set("value", np.asarray(heat, dtype=np.float32))
+        me.materials.append(self.mat)
+        self.ob = bpy.data.objects.new("Snakes", me)
+        self.ob.visible_shadow = False
+        bpy.context.scene.collection.objects.link(self.ob)
+
+
 def setup_world():
     s = bpy.context.scene
     w = bpy.data.worlds.new("Night")
@@ -683,6 +762,7 @@ class Scene:
         self.towers = [Tower(i, s, cells[i]) for i, s in enumerate(TL.SUITES)]
         self.beams = Searchlights()
         self.fireworks = Fireworks()
+        self.traffic = Traffic()
         self.dawn, self.stars, self.moon = setup_world()
         self.camera = Camera()
 
@@ -692,6 +772,7 @@ class Scene:
             tw.update(f)
         self.beams.update(f)
         self.fireworks.update(f)
+        self.traffic.update(f)
         dawn = TL.dawn(t)
         self.dawn.default_value = dawn
         self.stars.default_value = 1.0 - 0.8 * dawn
