@@ -568,9 +568,9 @@ class Fireworks:
 
 
 class Traffic:
-    """The commits as light snakes on the streets (traffic.py): a ribbon per
-    snake, white-hot at the head, the colour of its commit's kind along the
-    body, fading to the tail."""
+    """The commits as light snakes on the streets (traffic.py): a tapered tube
+    per snake with a white-hot rounded head, the colour of its commit's kind
+    along the body, fading to the tail."""
 
     def __init__(self):
         m = bpy.data.materials.new("Snake")
@@ -581,7 +581,7 @@ class Traffic:
         ca = node(nt, "ShaderNodeAttribute", (-200, 100), attribute_name="Col")
         ha = node(nt, "ShaderNodeAttribute", (-200, -100), attribute_name="heat")
         mul = node(nt, "ShaderNodeMath", (0, -100), operation="MULTIPLY")
-        mul.inputs[1].default_value = 4.0
+        mul.inputs[1].default_value = 2.2
         nt.links.new(ha.outputs["Fac"], mul.inputs[0])
         nt.links.new(ca.outputs["Color"], em.inputs["Color"])
         nt.links.new(mul.outputs[0], em.inputs["Strength"])
@@ -589,37 +589,90 @@ class Traffic:
         self.mat = m
         self.ob = None
 
+    STYLE = os.environ.get("SNAKE_STYLE", "tube")  # tube; t, capsule, wedge to compare
+
     def update(self, frame):
         if self.ob is not None:
             bpy.data.objects.remove(self.ob)
             self.ob = None
         verts, faces, cols, heat = [], [], [], []
         half = 0.2
+
+        def sphere(cx, cy, cz, r, c, h, rings=5, segs=10):
+            base = len(verts)
+            for a in range(rings + 1):
+                th = math.pi * a / rings
+                for b in range(segs):
+                    ph = 2 * math.pi * b / segs
+                    verts.append((cx + r * math.sin(th) * math.cos(ph),
+                                  cy + r * math.sin(th) * math.sin(ph), cz + r * math.cos(th)))
+                    cols.append(c)
+                    heat.append(h)
+            for a in range(rings):
+                for b in range(segs):
+                    p0 = base + a * segs + b
+                    p1 = base + a * segs + (b + 1) % segs
+                    faces.append((p0, p1, p1 + segs, p0 + segs))
+
         for pts, glow, kind in traffic.snakes(frame):
             if len(pts) < 2:
                 continue
             rgb = np.array(traffic.COLOURS[kind])
             n = len(pts)
-            base = len(verts)
+            prof = []  # (x, y, tx, ty, half width, fin height, colour, heat)
             for k, (x, y) in enumerate(pts):
                 a = pts[max(k - 1, 0)]
                 b = pts[min(k + 1, n - 1)]
-                dx, dy = b[0] - a[0], b[1] - a[1]
+                dx, dy = a[0] - b[0], a[1] - b[1]  # forward: towards the head
                 ln = math.hypot(dx, dy) or 1.0
-                nx, ny = -dy / ln * half, dx / ln * half
+                tx, ty = dx / ln, dy / ln
                 u = k / (n - 1)
                 w = max(1 - u * 12, 0)
                 c = w * np.ones(3) + (1 - w) * rgb * (1 - 0.4 * u)
+                h = glow * (1 - 0.85 * u) * (1.6 if k == 0 else 1.0)
+                prof.append([x, y, tx, ty, half, 0.32 * (1 - 0.6 * u), c, h])
+            hx, hy, htx, hty = prof[0][:4]
+            if self.STYLE == "wedge":
+                # an arrowhead: wider at the head, coming to a point ahead
+                prof[0][4] = half * 1.9
+                prof[0][5] = 0.42
+                tip = [hx + htx * 0.75, hy + hty * 0.75, htx, hty, 0.0, 0.05,
+                       np.ones(3), prof[0][7]]
+                prof.insert(0, tip)
+            if self.STYLE == "tube":
+                ring = 12
+                base = len(verts)
+                for k, (x, y, tx, ty, _, _, c, h) in enumerate(prof):
+                    r = 0.2 * (1 - 0.75 * k / (len(prof) - 1))
+                    nx, ny = -ty, tx
+                    for q in range(ring):
+                        an = 2 * math.pi * q / ring
+                        verts.append((x + nx * r * math.cos(an), y + ny * r * math.cos(an),
+                                      0.05 + r + r * math.sin(an)))
+                        cols.append(c)
+                        heat.append(h)
+                    if k:
+                        for q in range(ring):
+                            p0 = base + (k - 1) * ring + q
+                            p1 = base + (k - 1) * ring + (q + 1) % ring
+                            faces.append((p0, p1, p1 + ring, p0 + ring))
+                sphere(hx, hy, 0.25, 0.2, np.ones(3), prof[0][7] * 1.6, 4, 8)  # the cap
+                continue
+            base = len(verts)
+            for k, (x, y, tx, ty, hw, fin, c, h) in enumerate(prof):
+                nx, ny = -ty * hw, tx * hw
                 # a ribbon on the road and a low fin, so it reads from the street too
                 verts += [(x + nx, y + ny, 0.05), (x - nx, y - ny, 0.05),
-                          (x, y, 0.05), (x, y, 0.32 * (1 - 0.6 * u))]
+                          (x, y, 0.05), (x, y, fin)]
                 cols += [c, c, c, c]
-                h = glow * (1 - 0.85 * u) * (1.6 if k == 0 else 1.0)
                 heat += [h, h, h, h * 0.8]
                 if k:
                     i = base + 4 * (k - 1)
                     faces.append((i, i + 1, i + 5, i + 4))
                     faces.append((i + 2, i + 3, i + 7, i + 6))
+            if self.STYLE == "capsule":
+                sphere(hx + htx * 0.1, hy + hty * 0.1, 0.26, 0.26,
+                       0.6 * np.ones(3) + 0.4 * rgb, prof[0][7] * 1.3)
         if not faces:
             return
         me = bpy.data.meshes.new("Snakes")
@@ -722,6 +775,9 @@ class Camera:
 
     def set(self, frame):
         cam, tgt, lens = TL.camera(frame)
+        if os.environ.get("CAM"):  # x,y,z,tx,ty,tz,lens: a fixed view for tests
+            v = [float(c) for c in os.environ["CAM"].split(",")]
+            cam, tgt, lens = v[0:3], v[3:6], v[6]
         self.ob.location = cam
         self.tgt.location = tgt
         self.ob.data.lens = lens
