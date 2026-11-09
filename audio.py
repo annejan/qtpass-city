@@ -79,7 +79,7 @@ CHORDS = [  # (from second, MIDI notes)
     (32.5, [38, 45, 52]),         # sparse: summer
     (35, [34, 41, 46, 50, 53]),   # Bb: September builds
     (42, [36, 43, 48, 52, 55]),   # C
-    (48, [38, 45, 50, 54, 57]),   # D major: there
+    (47, [38, 45, 50, 54, 57]),   # D major: there
     (64, [38, 45, 52, 54, 57]),   # Dsus2/6, dawn
 ]
 drone = np.zeros(N)
@@ -97,7 +97,7 @@ for i, (t0, notes) in enumerate(CHORDS):
             for det in (-0.5, 0.5):
                 drone[a:b] += np.sin(2 * np.pi * (hz(n) * h + det) * tt + rng.uniform(0, 6.28)) * amp * g
 drone = lowpass(drone, 1500) / 30
-level = keyed([(0, 0), (3, 0.4), (11, 0.35), (15.5, 0.5), (35, 0.55), (48, 0.95),
+level = keyed([(0, 0), (3, 0.4), (11, 0.35), (15.5, 0.5), (35, 0.55), (47, 0.95),
                (60, 0.75), (TL.SECONDS - 4, 0.6), (TL.SECONDS, 0)])
 out[:, 0] += drone * level
 out[:, 1] += np.roll(drone, 240) * level
@@ -140,8 +140,8 @@ first = next(f for f, s, k in events)
 bell(TL.t_of(first), hz(74), 0.2, decay=4.5)
 
 # ---------------------------------------------------------------- fireworks
-for f0, name in TL.releases():
-    t = TL.t_of(f0) + rnd.uniform(0, 4) / TL.FPS
+for f0, name in TL.releases() + TL.finale():
+    t = TL.t_of(f0) + (0 if name == "finale" else rnd.uniform(0, 4) / TL.FPS)
     i = int(t * SR)
     big = "rc" not in name and "beta" not in name
     # the launch whistle, then the pop and the crackle
@@ -160,13 +160,22 @@ for f0, name in TL.releases():
         out[i:i + Lp, ch] += (pop + crack) * w * 0.5
 
 # ---------------------------------------------------------------- September
-rise = keyed([(0, 0), (35, 0), (46, 1), (48, 0), (TL.SECONDS, 0)])
+C = TL.CLIMAX
+rise = keyed([(0, 0), (35, 0), (C - 0.05, 1), (C + 0.3, 0), (TL.SECONDS, 0)])
 noise = bandpass(rng.standard_normal(N), 400, 6000)
 for ch in range(2):
     out[:, ch] += np.roll(noise, ch * 31) * rise ** 2 * 0.05
-bell(48.0, hz(74), 0.16, decay=5)
-bell(48.02, hz(78), 0.1, decay=5)
-bell(48.04, hz(81), 0.08, decay=5)
+# the peak: a deep boom under the bells
+i = int(C * SR)
+Lb = int(3.0 * SR)
+tb = np.arange(Lb) / SR
+fb = 48 * np.exp(-tb * 0.8) + 30
+boom = np.sin(2 * np.pi * np.cumsum(fb) / SR) * np.exp(-tb * 1.4) * (1 - np.exp(-tb * 300))
+for ch in range(2):
+    out[i:i + Lb, ch] += boom * 0.5
+bell(C, hz(74), 0.16, decay=5)
+bell(C + 0.02, hz(78), 0.1, decay=5)
+bell(C + 0.04, hz(81), 0.08, decay=5)
 
 # ---------------------------------------------------------------- room
 ir_len = int(2.2 * SR)

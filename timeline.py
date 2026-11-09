@@ -143,8 +143,12 @@ CAMERA = [
     (14.5, (-8.0, -24.0, 4.0), (6.0, -4.0, 1.5), 26),
     (21.0, (-14.0, -17.0, 7.0), (2.0, 2.0, 3.0), 24),
     (32.0, (-26.0, -34.0, 13.0), (3.0, 3.0, 6.0), 24),
-    (35.0, (-22.0, -44.0, 16.0), (4.0, 4.0, 7.0), 24),
-    (48.0, (8.0, -60.0, 26.0), (5.0, 8.0, 7.0), 26),
+    # September: down into the streets, to the foot of util for the peak
+    (35.0, (-34.0, -5.2, 2.5), (-10.0, -2.0, 4.0), 20),
+    (40.0, (-16.0, -5.2, 2.0), (6.0, 4.0, 6.0), 18),
+    (44.0, (4.0, -6.0, 1.6), (8.0, 14.0, 7.0), 17),   # round the corner,
+    (47.0, (6.5, 4.0, 1.5), (6.0, 24.0, 9.0), 16),    # mainwindow, configdialog ahead
+    (50.5, (4.0, -14.0, 20.0), (6.0, 12.0, 6.0), 22),   # and up, to see it
     (56.0, (40.0, -46.0, 34.0), (5.0, 8.0, 5.0), 28),
     (70.0, (30.0, -66.0, 6.0), (2.0, 10.0, 12.0), 30),
     (SECONDS, (18.0, -80.0, 3.0), (2.0, 10.0, 14.0), 32),
@@ -179,6 +183,30 @@ def camera(frame):
     tgt = tuple(_hermite(_CT, [k[2][a] for k in CAMERA], t) for a in range(3))
     lens = _hermite(_CT, [k[3] for k in CAMERA], t)
     return cam, tgt, lens
+
+
+CLIMAX = 47.0  # 22 September: the most windows lighting at once
+
+
+def pulse(t):
+    """0..1: the city's flare at the climax, sharp in, slow out."""
+    if t < CLIMAX:
+        return math.exp(-(CLIMAX - t) / 0.25)
+    return math.exp(-(t - CLIMAX) / 1.2)
+
+
+def peak(t):
+    """0..1: a wider swell round the climax (the searchlights stand up)."""
+    if t < CLIMAX:
+        u = min(max((t - (CLIMAX - 1.5)) / 1.5, 0.0), 1.0)
+    else:
+        u = min(max(1 - (t - CLIMAX) / 3.0, 0.0), 1.0)
+    return u * u * (3 - 2 * u)
+
+
+def finale():
+    """(frame, name) for the climax's own fireworks, after the releases'."""
+    return [(int((CLIMAX + 0.05 + 0.3 * k) * FPS) + 1, "finale") for k in range(8)]
 
 
 def dawn(t):

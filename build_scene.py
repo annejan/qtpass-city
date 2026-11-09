@@ -200,7 +200,7 @@ class Tower:
         self.lit.default_value = lit
         self.height.default_value = h
         glow = 2.0 + 4.0 * min(lit / 40, 1)
-        self.neon_em.inputs["Strength"].default_value = glow
+        self.neon_em.inputs["Strength"].default_value = glow * (1 + 3 * TL.pulse(TL.t_of(frame)))
         self.sign_em.inputs["Strength"].default_value = 3.0
 
 
@@ -461,7 +461,7 @@ class Searchlights:
                                          TL.T_NOW))
             f = min(max((frame - born) / 30, 0), 1)
             fade.default_value = 0.3 * f
-            tilt = math.radians(22 + 8 * math.sin(t * speed * 0.7 + ph))
+            tilt = math.radians(22 + 8 * math.sin(t * speed * 0.7 + ph)) * (1 - 0.9 * TL.peak(t))
             spin = ph + sense * t * speed
             # lean towards the city a little: aim at a point above it
             ob.rotation_euler = (tilt, 0, spin)
@@ -473,18 +473,21 @@ class Fireworks:
     def __init__(self):
         rnd = random.Random(44)
         self.bursts = []
-        for f0, name in TL.releases():
+        for f0, name in TL.releases() + TL.finale():
             big = "rc" not in name and "beta" not in name
             n = 90 if big else 45
             col = [(1.0, 0.45, 0.2), (0.4, 0.7, 1.0), (1.0, 0.85, 0.35),
                    (0.95, 0.35, 0.8), (0.6, 1.0, 0.9)][rnd.randrange(5)]
             c = (rnd.uniform(-25, 25), rnd.uniform(5, 40), rnd.uniform(28, 42))
+            if name == "finale":  # over util, where the camera looks up
+                c = (rnd.uniform(-14, 18), rnd.uniform(4, 30), rnd.uniform(24, 36))
             dirs = []
             for _ in range(n):
                 v = np.array([rnd.gauss(0, 1) for _ in range(3)])
                 v /= np.linalg.norm(v) + 1e-9
                 dirs.append(v * rnd.uniform(9, 13) * (1.0 if big else 0.7))
-            self.bursts.append((f0 + rnd.uniform(0, 4), np.array(c), np.array(dirs), col))
+            jitter = 0 if name == "finale" else rnd.uniform(0, 4)
+            self.bursts.append((f0 + jitter, np.array(c), np.array(dirs), col))
         m = bpy.data.materials.new("Spark")
         nt = m.node_tree
         nt.nodes.clear()
@@ -695,7 +698,7 @@ class Scene:
         self.moon.energy = 0.25 + 1.5 * dawn
         # the streets light up with the city
         total = TL.total_at(TL.date_at(f))
-        self.streets.default_value = 0.08 + 0.9 * min(total / 400, 1)
+        self.streets.default_value = (0.08 + 0.9 * min(total / 400, 1)) * (1 + 4 * TL.pulse(t))
         self.camera.set(f)
 
 
