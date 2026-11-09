@@ -3,7 +3,9 @@
 The tests of [QtPass](https://qtpass.org) as a city at night. Every test
 suite is a glass tower and every test a window that lights up green the
 moment the test lands on main. Releases are fireworks, CI workflows are
-searchlights sweeping the sky.
+searchlights sweeping the sky, and the commits are traffic: light snakes on
+the streets, as busy as the project was that week, coloured by what kind of
+commit each carries (translations, fixes, features, tests, CI, docs, tidying).
 
 The story is in the data: the first test arrived on 13 December 2016 ("LOL
 wut, also how do I link .."), there were three for eight years, and then in
@@ -17,8 +19,10 @@ tells the same history as a canyon wall.
 ## Files
 
 - `count_tests.py`: counts the Qt Test functions per suite at every commit on
-  main that touched `tests/` (and weekly), plus CI workflows and release tags,
-  into `data/`
+  main that touched `tests/` (and weekly), plus CI workflows, release tags and
+  every commit with its kind, into `data/`
+- `layout.py`: where the towers and streets are
+- `traffic.py`: the light snakes, simulated once for the whole film
 - `timeline.py`: the one clock (which date it is at every frame, tests per
   suite, camera path, title times) shared by the scene, the cards and the sound
 - `build_scene.py`: builds the city in Blender and renders it, setting every
@@ -28,12 +32,14 @@ tells the same history as a canyon wall.
   a riser into September), generated with numpy and scipy
 - `finish.sh`: bloom, vignette, grain, fades, titles and sound into an MP4
 - `preview.py`: a flat matplotlib storyboard of the timeline, before any 3D
+- `topview.py`: the town flat from above with its traffic, as a quick video
 
 ## Pipeline
 
 ```sh
 python3 count_tests.py ~/Projects/QtPass bb0fad7a9     # -> data/
 python3 preview.py                                     # -> preview.png
+python3 topview.py                                     # -> topview.mp4
 blender -b --factory-startup -P build_scene.py -- --stills 229,1057,1873 --pct 25
 ./render_chunks.sh 1 2040 25 16 frames                 # low-res, resumes after a crash
 python3 audio.py audio.wav
