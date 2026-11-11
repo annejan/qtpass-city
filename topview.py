@@ -16,8 +16,9 @@ import traffic
 
 W = 720
 VIEW = 2 * (L.RINGS + 0.2) * L.SPACING   # metres across
-SMALL = ImageFont.truetype(os.path.expanduser("~/.local/share/fonts/Lato/Lato-Regular.ttf"), 14)
-FONT = ImageFont.truetype(os.path.expanduser("~/.local/share/fonts/Lato/Lato-Regular.ttf"), 20)
+REGULAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts", "Lato-Regular.ttf")
+SMALL = ImageFont.truetype(REGULAR, 14)
+FONT = ImageFont.truetype(REGULAR, 20)
 
 
 def px(x, y):

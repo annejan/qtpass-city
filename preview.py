@@ -6,8 +6,14 @@ from datetime import datetime
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 from matplotlib.patches import Rectangle, Polygon, Circle
+import os
 import timeline as TL
+
+for _face in ("Light", "Regular", "Bold"):  # Lato comes with the repo
+    font_manager.fontManager.addfont(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                  "assets", "fonts", f"Lato-{_face}.ttf"))
 
 BG, INK, GREEN = "#070a12", "#e8edf5", "#4dff74"
 plt.rcParams.update({"font.family": "Lato", "text.color": INK, "axes.labelcolor": INK,
