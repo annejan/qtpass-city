@@ -1,5 +1,9 @@
 # QtPass city
 
+Watch the film: https://youtu.be/ubEiNRO2dns (4K; with Ukrainian titles: https://youtu.be/_q3vvii42FE)
+
+All three films in one world: https://youtu.be/R2otmal-P-A (4K, 3:12, code in [qtpass-world](https://github.com/annejan/qtpass-world))
+
 The tests of [QtPass](https://qtpass.org) as a city at night. Every test
 suite is a glass tower and every test a window that lights up green the
 moment the test lands on main. Releases are fireworks, CI workflows are
